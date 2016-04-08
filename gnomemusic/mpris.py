@@ -24,7 +24,7 @@
 # delete this exception statement from your version.
 
 
-from gnomemusic.player import PlaybackStatus, RepeatType
+from gnomemusic.player import PlaybackStatus, RepeatType, DiscoveryStatus
 from gnomemusic.albumArtCache import AlbumArtCache
 from gnomemusic.grilo import grilo
 from gnomemusic.playlists import Playlists
@@ -41,15 +41,14 @@ from pydbus import SessionBus
 from pydbus.generic import signal
 import pkg_resources, os
 
-def expose_service(app):
+def publish_service(app):
     bus = SessionBus()
-    bus.expose('org.mpris.MediaPlayer2.GnomeMusic', ("/org/mpris/MediaPlayer2", MediaPlayer2Service(app)))
+    service = MediaPlayer2Service(app)
+    bus.publish('org.mpris.MediaPlayer2.GnomeMusic', ("/org/mpris/MediaPlayer2", service))
+    return service
 
-class MediaPlayer2Service:
-    MEDIA_PLAYER2_IFACE = 'org.mpris.MediaPlayer2'
-    MEDIA_PLAYER2_PLAYER_IFACE = 'org.mpris.MediaPlayer2.Player'
-    MEDIA_PLAYER2_TRACKLIST_IFACE = 'org.mpris.MediaPlayer2.TrackList'
-    MEDIA_PLAYER2_PLAYLISTS_IFACE = 'org.mpris.MediaPlayer2.Playlists'
+class MediaPlayer2Service(object):
+    PropertiesChanged = signal()
 
     def __repr__(self):
         return '<MediaPlayer2Service>'
@@ -74,25 +73,6 @@ class MediaPlayer2Service:
         self.playlist_insert_handler = 0
         self.playlist_delete_handler = 0
         self.first_song_handler = 0
-
-    @log
-    def _get_playback_status(self):
-        state = self.player.get_playback_status()
-        if state == PlaybackStatus.PLAYING:
-            return 'Playing'
-        elif state == PlaybackStatus.PAUSED:
-            return 'Paused'
-        else:
-            return 'Stopped'
-
-    @log
-    def _get_loop_status(self):
-        if self.player.repeat == RepeatType.NONE:
-            return 'None'
-        elif self.player.repeat == RepeatType.SONG:
-            return 'Track'
-        else:
-            return 'Playlist'
 
     @log
     def _get_metadata(self, media=None):
@@ -207,14 +187,6 @@ class MediaPlayer2Service:
         return None
 
     @log
-    def _get_track_list(self):
-        if self.player.playlist:
-            return [self._get_media_id(track[self.player.playlistField])
-                    for track in self.player.playlist]
-        else:
-            return []
-
-    @log
     def _get_playlist_path(self, playlist):
         return '/org/mpris/MediaPlayer2/Playlist/%s' % \
             (playlist.get_id() if playlist else 'Invalid')
@@ -249,22 +221,13 @@ class MediaPlayer2Service:
             callback(playlists)
 
     @log
-    def _get_active_playlist(self):
-        playlist = self._get_playlist_from_id(self.player.playlistId) \
-            if self.player.playlistType == 'Playlist' else None
-        playlistName = AlbumArtCache.get_media_title(playlist) \
-            if playlist else ''
-        return (playlist is not None,
-                (self._get_playlist_path(playlist), playlistName, ''))
-
-    @log
     def _on_current_changed(self, player, data=None):
         if self.player.repeat == RepeatType.SONG:
             self.Seeked(0)
 
-        self.PropertiesChanged(self.MEDIA_PLAYER2_PLAYER_IFACE,
+        self.PropertiesChanged("org.mpris.MediaPlayer2.Player",
                                {
-                                   'Metadata': self._get_metadata(),
+                                   'Metadata': self.Metadata,
                                    'CanPlay': True,
                                    'CanPause': True,
                                },
@@ -272,43 +235,43 @@ class MediaPlayer2Service:
 
     @log
     def _on_thumbnail_updated(self, player, path, data=None):
-        self.PropertiesChanged(self.MEDIA_PLAYER2_PLAYER_IFACE,
+        self.PropertiesChanged("org.mpris.MediaPlayer2.Player",
                                {
-                                   'Metadata': self._get_metadata(),
+                                   'Metadata': self.Metadata,
                                },
                                [])
 
     @log
     def _on_playback_status_changed(self, data=None):
-        self.PropertiesChanged(self.MEDIA_PLAYER2_PLAYER_IFACE,
+        self.PropertiesChanged("org.mpris.MediaPlayer2.Player",
                                {
-                                   'PlaybackStatus': self._get_playback_status(),
+                                   'PlaybackStatus': self.PlaybackStatus,
                                },
                                [])
 
     @log
     def _on_repeat_mode_changed(self, player, data=None):
-        self.PropertiesChanged(self.MEDIA_PLAYER2_PLAYER_IFACE,
+        self.PropertiesChanged("org.mpris.MediaPlayer2.Player",
                                {
-                                   'LoopStatus': self._get_loop_status(),
-                                   'Shuffle': self.player.repeat == RepeatType.SHUFFLE,
+                                   'LoopStatus': self.LoopStatus,
+                                   'Shuffle': self.Shuffle,
                                },
                                [])
 
     @log
     def _on_volume_changed(self, player, data=None):
-        self.PropertiesChanged(self.MEDIA_PLAYER2_PLAYER_IFACE,
+        self.PropertiesChanged("org.mpris.MediaPlayer2.Player",
                                {
-                                   'Volume': self.player.get_volume(),
+                                   'Volume': self.Volume,
                                },
                                [])
 
     @log
     def _on_prev_next_invalidated(self, player, data=None):
-        self.PropertiesChanged(self.MEDIA_PLAYER2_PLAYER_IFACE,
+        self.PropertiesChanged("org.mpris.MediaPlayer2.Player",
                                {
-                                   'CanGoNext': self.player.has_next(),
-                                   'CanGoPrevious': self.player.has_previous(),
+                                   'CanGoNext': self.CanGoNext,
+                                   'CanGoPrevious': self.CanGoPrevious,
                                },
                                [])
 
@@ -317,7 +280,7 @@ class MediaPlayer2Service:
         if self.first_song_handler:
             model.disconnect(self.first_song_handler)
             self.first_song_handler = 0
-        self.player.set_playlist('Songs', None, model, iter_, 5)
+        self.player.set_playlist('Songs', None, model, iter_, 5, DiscoveryStatus.PENDING)
         self.player.set_playing(True)
 
     @log
@@ -335,9 +298,9 @@ class MediaPlayer2Service:
         self.playlist = self.player.playlist
         self._on_playlist_modified()
 
-        self.PropertiesChanged(self.MEDIA_PLAYER2_PLAYLISTS_IFACE,
+        self.PropertiesChanged("org.mpris.MediaPlayer2.Playlists",
                                {
-                                   'ActivePlaylist': self._get_active_playlist(),
+                                   'ActivePlaylist': self.ActivePlaylist,
                                },
                                [])
 
@@ -351,9 +314,9 @@ class MediaPlayer2Service:
         if self.player.currentTrack and self.player.currentTrack.valid():
             path = self.player.currentTrack.get_path()
             currentTrack = self.player.playlist[path][self.player.playlistField]
-            track_list = self._get_track_list()
+            track_list = self.Tracks
             self.TrackListReplaced(track_list, self._get_media_id(currentTrack))
-            self.PropertiesChanged(self.MEDIA_PLAYER2_TRACKLIST_IFACE,
+            self.PropertiesChanged("org.mpris.MediaPlayer2.TrackList",
                                    {
                                        'Tracks': track_list,
                                    },
@@ -363,9 +326,9 @@ class MediaPlayer2Service:
     def _reload_playlists(self):
         def get_playlists_callback(playlists):
             self.playlists = playlists
-            self.PropertiesChanged(self.MEDIA_PLAYER2_PLAYLISTS_IFACE,
+            self.PropertiesChanged("org.mpris.MediaPlayer2.Playlists",
                                    {
-                                       'PlaylistCount': len(playlists),
+                                       'PlaylistCount': self.PlaylistCount,
                                    },
                                    [])
 
@@ -379,11 +342,40 @@ class MediaPlayer2Service:
     def _on_grilo_ready(self, grilo):
         self._reload_playlists()
 
+# MediaPlayer2:
+
     def Raise(self):
         self.app.do_activate()
 
     def Quit(self):
         self.app.quit()
+
+    CanQuit = True
+
+    @property
+    def Fullscreen(self):
+        return False
+
+    @Fullscreen.setter
+    def Fullscreen(self, val):
+        pass
+
+    CanSetFullscreen = False
+    CanRaise = True
+    HasTrackList = True
+    Identity = 'Music'
+    DesktopEntry = 'gnome-music'
+    SupportedUriSchemes = [
+        'file'
+    ]
+    SupportedMimeTypes = [
+        'application/ogg',
+        'audio/x-vorbis+ogg',
+        'audio/x-flac',
+        'audio/mpeg'
+    ]
+
+# MediaPlayer2.Player:
 
     def Next(self):
         self.player.play_next()
@@ -417,10 +409,7 @@ class MediaPlayer2Service:
         self.player.set_position(offset, True, True)
 
     def SetPosition(self, track_id, position):
-        current_track_id = self._get_metadata().get('mpris:trackid')
-        if current_track_id:
-            current_track_id = current_track_id.unpack()
-        if track_id != current_track_id:
+        if track_id != self.Metadata.get('mpris:trackid').unpack():
             return
         self.player.set_position(position)
 
@@ -429,86 +418,24 @@ class MediaPlayer2Service:
 
     Seeked = signal()
 
-    def GetTracksMetadata(self, track_ids):
-        metadata = []
-        for track_id in track_ids:
-            metadata.append(self._get_metadata(self._get_media_from_id(track_id)))
-        return (metadata,)
-
-    def AddTrack(self, uri, after_track, set_as_current):
-        pass
-
-    def RemoveTrack(self, track_id):
-        pass
-
-    def GoTo(self, track_id):
-        for track in self.player.playlist:
-            media = track[self.player.playlistField]
-            if track_id == self._get_media_id(media):
-                self.player.set_playlist(self.player.playlistType,
-                                         self.player.playlistId,
-                                         self.player.playlist,
-                                         track.iter,
-                                         self.player.playlistField)
-                self.player.play()
-                return
-
-    TrackListReplaced = signal()
-    TrackAdded = signal()
-    TrackRemoved = signal()
-    TrackMetadataChanged = signal()
-
-    def ActivatePlaylist(self, playlist_path):
-        playlist_id = self._get_playlist_from_path(playlist_path).get_id()
-        self.app._window.views[3].activate_playlist(playlist_id)
-
-    def GetPlaylists(self, index, max_count, order, reverse):
-        if order != 'Alphabetical':
-            return ([],)
-        playlists = [(self._get_playlist_path(playlist),
-                      AlbumArtCache.get_media_title(playlist) or '', '')
-                     for playlist in self.playlists]
-        return (playlists[index:index + max_count] if not reverse \
-            else playlists[index + max_count - 1:index - 1 if index - 1 >= 0 else None:-1],)
-
-    PlaylistChanged = signal()
-
-# MEDIA_PLAYER2_IFACE:
-
-    CanQuit = True
-
-    @property
-    def Fullscreen(self):
-        return False
-
-    @Fullscreen.setter
-    def Fullscreen(self, val):
-        pass
-
-    CanSetFullscreen = False
-    CanRaise = True
-    HasTrackList = True
-    Identity = 'Music'
-    DesktopEntry = 'gnome-music'
-    SupportedUriSchemes = [
-        'file'
-    ]
-    SupportedMimeTypes = [
-        'application/ogg',
-        'audio/x-vorbis+ogg',
-        'audio/x-flac',
-        'audio/mpeg'
-    ]
-
-# MEDIA_PLAYER2_PLAYER_IFACE:
-
     @property
     def PlaybackStatus(self):
-        return self._get_playback_status()
+        state = self.player.get_playback_status()
+        if state == PlaybackStatus.PLAYING:
+            return 'Playing'
+        elif state == PlaybackStatus.PAUSED:
+            return 'Paused'
+        else:
+            return 'Stopped'
 
     @property
     def LoopStatus(self):
-        return self._get_loop_status()
+        if self.player.repeat == RepeatType.NONE:
+            return 'None'
+        elif self.player.repeat == RepeatType.SONG:
+            return 'Track'
+        else:
+            return 'Playlist'
 
     @LoopStatus.setter
     def LoopStatus(self, val):
@@ -576,15 +503,64 @@ class MediaPlayer2Service:
     CanSeek = True
     CanControl = True
 
-# MEDIA_PLAYER2_TRACKLIST_IFACE:
+# MediaPlayer2.TrackList:
+
+    def GetTracksMetadata(self, track_ids):
+        metadata = []
+        for track_id in track_ids:
+            metadata.append(self._get_metadata(self._get_media_from_id(track_id)))
+        return metadata
+
+    def AddTrack(self, uri, after_track, set_as_current):
+        pass
+
+    def RemoveTrack(self, track_id):
+        pass
+
+    def GoTo(self, track_id):
+        for track in self.player.playlist:
+            media = track[self.player.playlistField]
+            if track_id == self._get_media_id(media):
+                self.player.set_playlist(self.player.playlistType,
+                                         self.player.playlistId,
+                                         self.player.playlist,
+                                         track.iter,
+                                         self.player.playlistField,
+                                         DiscoveryStatus.PENDING)
+                self.player.play()
+                return
+
+    TrackListReplaced = signal()
+    TrackAdded = signal()
+    TrackRemoved = signal()
+    TrackMetadataChanged = signal()
 
     @property
     def Tracks(self):
-        return self._get_track_list()
+        if self.player.playlist:
+            return [self._get_media_id(track[self.player.playlistField])
+                    for track in self.player.playlist]
+        else:
+            return []
 
     CanEditTracks = False
 
-# MEDIA_PLAYER2_PLAYLISTS_IFACE:
+# MediaPlayer2.Playlists:
+
+    def ActivatePlaylist(self, playlist_path):
+        playlist_id = self._get_playlist_from_path(playlist_path).get_id()
+        self.app._window.views[3].activate_playlist(playlist_id)
+
+    def GetPlaylists(self, index, max_count, order, reverse):
+        if order != 'Alphabetical':
+            return []
+        playlists = [(self._get_playlist_path(playlist),
+                      AlbumArtCache.get_media_title(playlist) or '', '')
+                     for playlist in self.playlists]
+        return playlists[index:index + max_count] if not reverse \
+            else playlists[index + max_count - 1:index - 1 if index - 1 >= 0 else None:-1]
+
+    PlaylistChanged = signal()
 
     @property
     def PlaylistCount(self):
@@ -594,9 +570,12 @@ class MediaPlayer2Service:
 
     @property
     def ActivePlaylist(self):
-        return self._get_active_playlist()
-
-    PropertiesChanged = signal()
+        playlist = self._get_playlist_from_id(self.player.playlistId) \
+            if self.player.playlistType == 'Playlist' else None
+        playlistName = AlbumArtCache.get_media_title(playlist) \
+            if playlist else ''
+        return (playlist is not None,
+                (self._get_playlist_path(playlist), playlistName, ''))
 
 ifaces = ["org.mpris.MediaPlayer2", "org.mpris.MediaPlayer2.Player", "org.mpris.MediaPlayer2.Playlists", "org.mpris.MediaPlayer2.TrackList"]
 MediaPlayer2Service.dbus = [pkg_resources.resource_string(__name__, "mpris/" + iface + ".xml").decode("utf-8") for iface in ifaces]

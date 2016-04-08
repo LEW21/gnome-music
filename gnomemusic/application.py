@@ -35,7 +35,7 @@ gi.require_version('Notify', '0.7')
 from gi.repository import Gtk, Gio, GLib, Gdk, Notify
 from gettext import gettext as _
 from gnomemusic.window import Window
-from gnomemusic.mpris import expose_service
+from gnomemusic.mpris import publish_service
 from gnomemusic.notification import NotificationManager
 from gnomemusic import log
 import logging
@@ -115,7 +115,7 @@ class Application(Gtk.Application):
     def do_activate(self):
         if not self._window:
             self._window = Window(self)
-            self.service = expose_service(self)
+            self.service = publish_service(self)
             if self.settings.get_value('notifications'):
                 self._notifications = NotificationManager(self._window.player)
 
