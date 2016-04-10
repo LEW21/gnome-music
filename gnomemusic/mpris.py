@@ -31,194 +31,27 @@ from gnomemusic.playlists import Playlists
 from gettext import gettext as _
 from gi.repository import GLib
 from gi.repository import Grl
-from gi.repository import Gio
 from gnomemusic import log
 import logging
 logger = logging.getLogger(__name__)
 
+from pydbus import SessionBus
+from pydbus.generic import signal
+import pkg_resources, os
 
-class Server:
-    def __init__(self, con, path):
-        method_outargs = {}
-        method_inargs = {}
-        for interface in Gio.DBusNodeInfo.new_for_xml(self.__doc__).interfaces:
+def publish_service(app):
+    bus = SessionBus()
+    service = MediaPlayer2Service(app)
+    bus.publish('org.mpris.MediaPlayer2.GnomeMusic', ("/org/mpris/MediaPlayer2", service))
+    return service
 
-            for method in interface.methods:
-                method_outargs[method.name] = '(' + ''.join([arg.signature for arg in method.out_args]) + ')'
-                method_inargs[method.name] = tuple(arg.signature for arg in method.in_args)
-
-            con.register_object(object_path=path,
-                                interface_info=interface,
-                                method_call_closure=self.on_method_call)
-
-        self.method_inargs = method_inargs
-        self.method_outargs = method_outargs
-
-    def on_method_call(self,
-                       connection,
-                       sender,
-                       object_path,
-                       interface_name,
-                       method_name,
-                       parameters,
-                       invocation):
-
-        args = list(parameters.unpack())
-        for i, sig in enumerate(self.method_inargs[method_name]):
-            if sig is 'h':
-                msg = invocation.get_message()
-                fd_list = msg.get_unix_fd_list()
-                args[i] = fd_list.get(args[i])
-
-        result = getattr(self, method_name)(*args)
-
-        if type(result) is list:
-            result = tuple(result)
-        elif not type(result) is tuple:
-            result = (result,)
-
-        out_args = self.method_outargs[method_name]
-        if out_args != '()':
-            variant = GLib.Variant(out_args, result)
-            invocation.return_value(variant)
-        else:
-            invocation.return_value(None)
-
-
-class MediaPlayer2Service(Server):
-    '''
-    <!DOCTYPE node PUBLIC '-//freedesktop//DTD D-BUS Object Introspection 1.0//EN'
-    'http://www.freedesktop.org/standards/dbus/1.0/introspect.dtd'>
-    <node>
-        <interface name='org.freedesktop.DBus.Introspectable'>
-            <method name='Introspect'>
-                <arg name='data' direction='out' type='s'/>
-            </method>
-        </interface>
-        <interface name='org.freedesktop.DBus.Properties'>
-            <method name='Get'>
-                <arg name='interface' direction='in' type='s'/>
-                <arg name='property' direction='in' type='s'/>
-                <arg name='value' direction='out' type='v'/>
-            </method>
-            <method name="Set">
-                <arg name="interface_name" direction="in" type="s"/>
-                <arg name="property_name" direction="in" type="s"/>
-                <arg name="value" direction="in" type="v"/>
-            </method>
-            <method name='GetAll'>
-                <arg name='interface' direction='in' type='s'/>
-                <arg name='properties' direction='out' type='a{sv}'/>
-            </method>
-        </interface>
-        <interface name='org.mpris.MediaPlayer2'>
-            <method name='Raise'>
-            </method>
-            <method name='Quit'>
-            </method>
-            <property name='CanQuit' type='b' access='read' />
-            <property name='Fullscreen' type='b' access='readwrite' />
-            <property name='CanRaise' type='b' access='read' />
-            <property name='HasTrackList' type='b' access='read'/>
-            <property name='Identity' type='s' access='read'/>
-            <property name='DesktopEntry' type='s' access='read'/>
-            <property name='SupportedUriSchemes' type='as' access='read'/>
-            <property name='SupportedMimeTypes' type='as' access='read'/>
-        </interface>
-        <interface name='org.mpris.MediaPlayer2.Player'>
-            <method name='Next'/>
-            <method name='Previous'/>
-            <method name='Pause'/>
-            <method name='PlayPause'/>
-            <method name='Stop'/>
-            <method name='Play'/>
-            <method name='Seek'>
-                <arg direction='in' name='Offset' type='x'/>
-            </method>
-            <method name='SetPosition'>
-                <arg direction='in' name='TrackId' type='o'/>
-                <arg direction='in' name='Position' type='x'/>
-            </method>
-            <method name='OpenUri'>
-                <arg direction='in' name='Uri' type='s'/>
-            </method>
-            <signal name='Seeked'>
-                <arg name='Position' type='x'/>
-            </signal>
-            <property name='PlaybackStatus' type='s' access='read'/>
-            <property name='LoopStatus' type='s' access='readwrite'/>
-            <property name='Rate' type='d' access='readwrite'/>
-            <property name='Shuffle' type='b' access='readwrite'/>
-            <property name='Metadata' type='a{sv}' access='read'>
-            </property>
-            <property name='Volume' type='d' access='readwrite'/>
-            <property name='Position' type='x' access='read'/>
-            <property name='MinimumRate' type='d' access='read'/>
-            <property name='MaximumRate' type='d' access='read'/>
-            <property name='CanGoNext' type='b' access='read'/>
-            <property name='CanGoPrevious' type='b' access='read'/>
-            <property name='CanPlay' type='b' access='read'/>
-            <property name='CanPause' type='b' access='read'/>
-            <property name='CanSeek' type='b' access='read'/>
-            <property name='CanControl' type='b' access='read'/>
-        </interface>
-        <interface name='org.mpris.MediaPlayer2.TrackList'>
-            <method name='GetTracksMetadata'>
-                <arg direction='in' name='TrackIds' type='ao'/>
-                <arg direction='out' name='Metadata' type='aa{sv}'>
-                </arg>
-            </method>
-            <method name='AddTrack'>
-                <arg direction='in' name='Uri' type='s'/>
-                <arg direction='in' name='AfterTrack' type='o'/>
-                <arg direction='in' name='SetAsCurrent' type='b'/>
-            </method>
-            <method name='RemoveTrack'>
-                <arg direction='in' name='TrackId' type='o'/>
-            </method>
-            <method name='GoTo'>
-                <arg direction='in' name='TrackId' type='o'/>
-            </method>
-            <signal name='TrackListReplaced'>
-                <arg name='Tracks' type='ao'/>
-                <arg name='CurrentTrack' type='o'/>
-            </signal>
-            <signal name='TrackAdded'>
-                <arg name='Metadata' type='a{sv}'>
-                </arg>
-                <arg name='AfterTrack' type='o'/>
-            </signal>
-            <signal name='TrackRemoved'>
-                <arg name='TrackId' type='o'/>
-            </signal>
-            <signal name='TrackMetadataChanged'>
-                <arg name='TrackId' type='o'/>
-                <arg name='Metadata' type='a{sv}'>
-                </arg>
-            </signal>
-            <property name='Tracks' type='ao' access='read'/>
-            <property name='CanEditTracks' type='b' access='read'/>
-        </interface>
-    </node>
-    '''
-
-    MEDIA_PLAYER2_IFACE = 'org.mpris.MediaPlayer2'
-    MEDIA_PLAYER2_PLAYER_IFACE = 'org.mpris.MediaPlayer2.Player'
-    MEDIA_PLAYER2_TRACKLIST_IFACE = 'org.mpris.MediaPlayer2.TrackList'
-    MEDIA_PLAYER2_PLAYLISTS_IFACE = 'org.mpris.MediaPlayer2.Playlists'
+class MediaPlayer2Service(object):
+    PropertiesChanged = signal()
 
     def __repr__(self):
         return '<MediaPlayer2Service>'
 
     def __init__(self, app):
-        self.con = Gio.bus_get_sync(Gio.BusType.SESSION, None)
-        Gio.bus_own_name_on_connection(self.con,
-                                       'org.mpris.MediaPlayer2.GnomeMusic',
-                                       Gio.BusNameOwnerFlags.NONE,
-                                       None,
-                                       None)
-        super().__init__(self.con, '/org/mpris/MediaPlayer2')
-
         self.app = app
         self.player = app.get_active_window().player
         self.player.connect('current-changed', self._on_current_changed)
@@ -239,8 +72,8 @@ class MediaPlayer2Service(Server):
         self.playlist_delete_handler = 0
         self.first_song_handler = 0
 
-    @log
-    def _get_playback_status(self):
+    @property
+    def PlaybackStatus(self):
         state = self.player.get_playback_status()
         if state == PlaybackStatus.PLAYING:
             return 'Playing'
@@ -249,8 +82,8 @@ class MediaPlayer2Service(Server):
         else:
             return 'Stopped'
 
-    @log
-    def _get_loop_status(self):
+    @property
+    def LoopStatus(self):
         if self.player.repeat == RepeatType.NONE:
             return 'None'
         elif self.player.repeat == RepeatType.SONG:
@@ -370,8 +203,8 @@ class MediaPlayer2Service(Server):
                 return media
         return None
 
-    @log
-    def _get_track_list(self):
+    @property
+    def Tracks(self):
         if self.player.playlist:
             return [self._get_media_id(track[self.player.playlistField])
                     for track in self.player.playlist]
@@ -412,8 +245,8 @@ class MediaPlayer2Service(Server):
         else:
             callback(playlists)
 
-    @log
-    def _get_active_playlist(self):
+    @property
+    def ActivePlaylist(self):
         playlist = self._get_playlist_from_id(self.player.playlistId) \
             if self.player.playlistType == 'Playlist' else None
         playlistName = AlbumArtCache.get_media_title(playlist) \
@@ -426,53 +259,53 @@ class MediaPlayer2Service(Server):
         if self.player.repeat == RepeatType.SONG:
             self.Seeked(0)
 
-        self.PropertiesChanged(MediaPlayer2Service.MEDIA_PLAYER2_PLAYER_IFACE,
+        self.PropertiesChanged("org.mpris.MediaPlayer2.Player",
                                {
-                                   'Metadata': GLib.Variant('a{sv}', self._get_metadata()),
-                                   'CanPlay': GLib.Variant('b', True),
-                                   'CanPause': GLib.Variant('b', True),
+                                   'Metadata': self.Metadata,
+                                   'CanPlay': True,
+                                   'CanPause': True,
                                },
                                [])
 
     @log
     def _on_thumbnail_updated(self, player, path, data=None):
-        self.PropertiesChanged(MediaPlayer2Service.MEDIA_PLAYER2_PLAYER_IFACE,
+        self.PropertiesChanged("org.mpris.MediaPlayer2.Player",
                                {
-                                   'Metadata': GLib.Variant('a{sv}', self._get_metadata()),
+                                   'Metadata': self.Metadata,
                                },
                                [])
 
     @log
     def _on_playback_status_changed(self, data=None):
-        self.PropertiesChanged(MediaPlayer2Service.MEDIA_PLAYER2_PLAYER_IFACE,
+        self.PropertiesChanged("org.mpris.MediaPlayer2.Player",
                                {
-                                   'PlaybackStatus': GLib.Variant('s', self._get_playback_status()),
+                                   'PlaybackStatus': self.PlaybackStatus,
                                },
                                [])
 
     @log
     def _on_repeat_mode_changed(self, player, data=None):
-        self.PropertiesChanged(MediaPlayer2Service.MEDIA_PLAYER2_PLAYER_IFACE,
+        self.PropertiesChanged("org.mpris.MediaPlayer2.Player",
                                {
-                                   'LoopStatus': GLib.Variant('s', self._get_loop_status()),
-                                   'Shuffle': GLib.Variant('b', self.player.repeat == RepeatType.SHUFFLE),
+                                   'LoopStatus': self.LoopStatus,
+                                   'Shuffle': self.Shuffle,
                                },
                                [])
 
     @log
     def _on_volume_changed(self, player, data=None):
-        self.PropertiesChanged(MediaPlayer2Service.MEDIA_PLAYER2_PLAYER_IFACE,
+        self.PropertiesChanged("org.mpris.MediaPlayer2.Player",
                                {
-                                   'Volume': GLib.Variant('d', self.player.get_volume()),
+                                   'Volume': self.Volume,
                                },
                                [])
 
     @log
     def _on_prev_next_invalidated(self, player, data=None):
-        self.PropertiesChanged(MediaPlayer2Service.MEDIA_PLAYER2_PLAYER_IFACE,
+        self.PropertiesChanged("org.mpris.MediaPlayer2.Player",
                                {
-                                   'CanGoNext': GLib.Variant('b', self.player.has_next()),
-                                   'CanGoPrevious': GLib.Variant('b', self.player.has_previous()),
+                                   'CanGoNext': self.CanGoNext,
+                                   'CanGoPrevious': self.CanGoPrevious,
                                },
                                [])
 
@@ -499,9 +332,9 @@ class MediaPlayer2Service(Server):
         self.playlist = self.player.playlist
         self._on_playlist_modified()
 
-        self.PropertiesChanged(MediaPlayer2Service.MEDIA_PLAYER2_PLAYLISTS_IFACE,
+        self.PropertiesChanged("org.mpris.MediaPlayer2.Playlists",
                                {
-                                'ActivePlaylist': GLib.Variant('(b(oss))', self._get_active_playlist()),
+                                   'ActivePlaylist': self.ActivePlaylist,
                                },
                                [])
 
@@ -515,11 +348,11 @@ class MediaPlayer2Service(Server):
         if self.player.currentTrack and self.player.currentTrack.valid():
             path = self.player.currentTrack.get_path()
             currentTrack = self.player.playlist[path][self.player.playlistField]
-            track_list = self._get_track_list()
+            track_list = self.Tracks
             self.TrackListReplaced(track_list, self._get_media_id(currentTrack))
-            self.PropertiesChanged(MediaPlayer2Service.MEDIA_PLAYER2_TRACKLIST_IFACE,
+            self.PropertiesChanged("org.mpris.MediaPlayer2.TrackList",
                                    {
-                                       'Tracks': GLib.Variant('ao', track_list),
+                                       'Tracks': track_list,
                                    },
                                    [])
 
@@ -527,9 +360,9 @@ class MediaPlayer2Service(Server):
     def _reload_playlists(self):
         def get_playlists_callback(playlists):
             self.playlists = playlists
-            self.PropertiesChanged(MediaPlayer2Service.MEDIA_PLAYER2_PLAYLISTS_IFACE,
+            self.PropertiesChanged("org.mpris.MediaPlayer2.Playlists",
                                    {
-                                       'PlaylistCount': GLib.Variant('u', len(playlists)),
+                                       'PlaylistCount': self.PlaylistCount,
                                    },
                                    [])
 
@@ -543,11 +376,40 @@ class MediaPlayer2Service(Server):
     def _on_grilo_ready(self, grilo):
         self._reload_playlists()
 
+# MediaPlayer2:
+
     def Raise(self):
         self.app.do_activate()
 
     def Quit(self):
         self.app.quit()
+
+    CanQuit = True
+
+    @property
+    def Fullscreen(self):
+        return False
+
+    @Fullscreen.setter
+    def Fullscreen(self, val):
+        pass
+
+    CanSetFullscreen = False
+    CanRaise = True
+    HasTrackList = True
+    Identity = 'Music'
+    DesktopEntry = 'gnome-music'
+    SupportedUriSchemes = [
+        'file'
+    ]
+    SupportedMimeTypes = [
+        'application/ogg',
+        'audio/x-vorbis+ogg',
+        'audio/x-flac',
+        'audio/mpeg'
+    ]
+
+# MediaPlayer2.Player:
 
     def Next(self):
         self.player.play_next()
@@ -584,19 +446,85 @@ class MediaPlayer2Service(Server):
         self.player.set_position(offset, True, True)
 
     def SetPosition(self, track_id, position):
-        if track_id != self._get_metadata().get('mpris:trackid').get_string():
+        if track_id != self.Metadata.get('mpris:trackid').unpack():
             return
         self.player.set_position(position)
 
     def OpenUri(self, uri):
         pass
 
-    def Seeked(self, position):
-        self.con.emit_signal(None,
-                             '/org/mpris/MediaPlayer2',
-                             MediaPlayer2Service.MEDIA_PLAYER2_PLAYER_IFACE,
-                             'Seeked',
-                             GLib.Variant.new_tuple(GLib.Variant('x', position)))
+    Seeked = signal()
+
+    #PlaybackStatus - getter implemented above
+    #LoopStatus - getter implemented above
+
+    @LoopStatus.setter
+    def LoopStatus(self, val):
+        if val == 'None':
+            self.player.set_repeat_mode(RepeatType.NONE)
+        elif val == 'Track':
+            self.player.set_repeat_mode(RepeatType.SONG)
+        elif val == 'Playlist':
+            self.player.set_repeat_mode(RepeatType.ALL)
+
+    @property
+    def Rate(self):
+        return 1.0
+
+    @Rate.setter
+    def Rate(self, val):
+        pass
+
+    @property
+    def Shuffle(self):
+        return self.player.repeat == RepeatType.SHUFFLE
+
+    @Shuffle.setter
+    def Shuffle(self, val):
+        if val and self.player.get_repeat_mode() != RepeatType.SHUFFLE:
+            self.set_repeat_mode(RepeatType.SHUFFLE)
+        elif not val and self.player.get_repeat_mode() == RepeatType.SHUFFLE:
+            self.set_repeat_mode(RepeatType.NONE)
+
+    @property
+    def Metadata(self):
+        return self._get_metadata()
+
+    @property
+    def Volume(self):
+        return self.player.get_volume()
+
+    @Volume.setter
+    def Volume(self, val):
+        self.player.set_volume(val)
+
+    @property
+    def Position(self):
+        return self.player.get_position()
+
+    MinimumRate = 1.0
+    MaximumRate = 1.0
+
+    @property
+    def CanGoNext(self):
+        return self.player.has_next()
+
+    @property
+    def CanGoPrevious(self):
+        return self.player.has_previous()
+
+    @property
+    def CanPlay(self):
+        return self.player.currentTrack is not None
+
+    @property
+    def CanPause(self):
+        return self.player.currentTrack is not None
+
+    CanSeek = True
+    CanControl = True
+
+# MediaPlayer2.TrackList:
 
     def GetTracksMetadata(self, track_ids):
         metadata = []
@@ -623,36 +551,16 @@ class MediaPlayer2Service(Server):
                 self.player.play()
                 return
 
-    def TrackListReplaced(self, tracks, current_track):
-        self.con.emit_signal(None,
-                             '/org/mpris/MediaPlayer2',
-                             MediaPlayer2Service.MEDIA_PLAYER2_TRACKLIST_IFACE,
-                             'TrackListReplaced',
-                             GLib.Variant.new_tuple(GLib.Variant('ao', tracks),
-                                                    GLib.Variant('o', current_track)))
+    TrackListReplaced = signal()
+    TrackAdded = signal()
+    TrackRemoved = signal()
+    TrackMetadataChanged = signal()
 
-    def TrackAdded(self, metadata, after_track):
-        self.con.emit_signal(None,
-                             '/org/mpris/MediaPlayer2',
-                             MediaPlayer2Service.MEDIA_PLAYER2_TRACKLIST_IFACE,
-                             'TrackAdded',
-                             GLib.Variant.new_tuple(GLib.Variant('a{sv}', metadata),
-                                                    GLib.Variant('o', after_track)))
+    #Tracks - getter implemented above
 
-    def TrackRemoved(self, track_id):
-        self.con.emit_signal(None,
-                             '/org/mpris/MediaPlayer2',
-                             MediaPlayer2Service.MEDIA_PLAYER2_TRACKLIST_IFACE,
-                             'TrackRemoved',
-                             GLib.Variant.new_tuple(GLib.Variant('o', track_id)))
+    CanEditTracks = False
 
-    def TrackMetadataChanged(self, track_id, metadata):
-        self.con.emit_signal(None,
-                             '/org/mpris/MediaPlayer2',
-                             MediaPlayer2Service.MEDIA_PLAYER2_TRACKLIST_IFACE,
-                             'TrackMetadataChanged',
-                             GLib.Variant.new_tuple(GLib.Variant('o', track_id),
-                                                    GLib.Variant('a{sv}', metadata)))
+# MediaPlayer2.Playlists:
 
     def ActivatePlaylist(self, playlist_path):
         playlist_id = self._get_playlist_from_path(playlist_path).get_id()
@@ -667,111 +575,15 @@ class MediaPlayer2Service(Server):
         return playlists[index:index + max_count] if not reverse \
             else playlists[index + max_count - 1:index - 1 if index - 1 >= 0 else None:-1]
 
-    def PlaylistChanged(self, playlist):
-        self.con.emit_signal(None,
-                             '/org/mpris/MediaPlayer2',
-                             MediaPlayer2Service.MEDIA_PLAYER2_PLAYLISTS_IFACE,
-                             'PlaylistChanged',
-                             GLib.Variant.new_tuple(GLib.Variant('(oss)', playlist)))
+    PlaylistChanged = signal()
 
-    def Get(self, interface_name, property_name):
-        return self.GetAll(interface_name)[property_name]
+    @property
+    def PlaylistCount(self):
+        return len(self.playlists)
 
-    def GetAll(self, interface_name):
-        if interface_name == MediaPlayer2Service.MEDIA_PLAYER2_IFACE:
-            return {
-                'CanQuit': GLib.Variant('b', True),
-                'Fullscreen': GLib.Variant('b', False),
-                'CanSetFullscreen': GLib.Variant('b', False),
-                'CanRaise': GLib.Variant('b', True),
-                'HasTrackList': GLib.Variant('b', True),
-                'Identity': GLib.Variant('s', 'Music'),
-                'DesktopEntry': GLib.Variant('s', 'gnome-music'),
-                'SupportedUriSchemes': GLib.Variant('as', [
-                    'file'
-                ]),
-                'SupportedMimeTypes': GLib.Variant('as', [
-                    'application/ogg',
-                    'audio/x-vorbis+ogg',
-                    'audio/x-flac',
-                    'audio/mpeg'
-                ]),
-            }
-        elif interface_name == MediaPlayer2Service.MEDIA_PLAYER2_PLAYER_IFACE:
-            return {
-                'PlaybackStatus': GLib.Variant('s', self._get_playback_status()),
-                'LoopStatus': GLib.Variant('s', self._get_loop_status()),
-                'Rate': GLib.Variant('d', 1.0),
-                'Shuffle': GLib.Variant('b', self.player.repeat == RepeatType.SHUFFLE),
-                'Metadata': GLib.Variant('a{sv}', self._get_metadata()),
-                'Volume': GLib.Variant('d', self.player.get_volume()),
-                'Position': GLib.Variant('x', self.player.get_position()),
-                'MinimumRate': GLib.Variant('d', 1.0),
-                'MaximumRate': GLib.Variant('d', 1.0),
-                'CanGoNext': GLib.Variant('b', self.player.has_next()),
-                'CanGoPrevious': GLib.Variant('b', self.player.has_previous()),
-                'CanPlay': GLib.Variant('b', self.player.currentTrack is not None),
-                'CanPause': GLib.Variant('b', self.player.currentTrack is not None),
-                'CanSeek': GLib.Variant('b', True),
-                'CanControl': GLib.Variant('b', True),
-            }
-        elif interface_name == MediaPlayer2Service.MEDIA_PLAYER2_TRACKLIST_IFACE:
-            return {
-                'Tracks': GLib.Variant('ao', self._get_track_list()),
-                'CanEditTracks': GLib.Variant('b', False)
-            }
-        elif interface_name == MediaPlayer2Service.MEDIA_PLAYER2_PLAYLISTS_IFACE:
-            return {
-                'PlaylistCount': GLib.Variant('u', len(self.playlists)),
-                'Orderings': GLib.Variant('as', ['Alphabetical']),
-                'ActivePlaylist': GLib.Variant('(b(oss))', self._get_active_playlist()),
-            }
-        elif interface_name == 'org.freedesktop.DBus.Properties':
-            return {}
-        elif interface_name == 'org.freedesktop.DBus.Introspectable':
-            return {}
-        else:
-            raise Exception(
-                'org.mpris.MediaPlayer2.GnomeMusic',
-                'This object does not implement the %s interface'
-                % interface_name)
+    Orderings = ('Alphabetical',)
 
-    def Set(self, interface_name, property_name, new_value):
-        if interface_name == MediaPlayer2Service.MEDIA_PLAYER2_IFACE:
-            if property_name == 'Fullscreen':
-                pass
-        elif interface_name == MediaPlayer2Service.MEDIA_PLAYER2_PLAYER_IFACE:
-            if property_name == 'Rate':
-                pass
-            elif property_name == 'Volume':
-                self.player.set_volume(new_value)
-            elif property_name == 'LoopStatus':
-                if new_value == 'None':
-                    self.player.set_repeat_mode(RepeatType.NONE)
-                elif new_value == 'Track':
-                    self.player.set_repeat_mode(RepeatType.SONG)
-                elif new_value == 'Playlist':
-                    self.player.set_repeat_mode(RepeatType.ALL)
-            elif property_name == 'Shuffle':
-                if (new_value and self.player.get_repeat_mode() != RepeatType.SHUFFLE):
-                    self.set_repeat_mode(RepeatType.SHUFFLE)
-                elif new_value and self.player.get_repeat_mode() == RepeatType.SHUFFLE:
-                    self.set_repeat_mode(RepeatType.NONE)
-        else:
-            raise Exception(
-                'org.mpris.MediaPlayer2.GnomeMusic',
-                'This object does not implement the %s interface'
-                % interface_name)
+    #ActivePlaylist - getter implemented above
 
-    def PropertiesChanged(self, interface_name, changed_properties,
-                          invalidated_properties):
-        self.con.emit_signal(None,
-                             '/org/mpris/MediaPlayer2',
-                             'org.freedesktop.DBus.Properties',
-                             'PropertiesChanged',
-                             GLib.Variant.new_tuple(GLib.Variant('s', interface_name),
-                                                    GLib.Variant('a{sv}', changed_properties),
-                                                    GLib.Variant('as', invalidated_properties)))
-
-    def Introspect(self):
-        return self.__doc__
+ifaces = ["org.mpris.MediaPlayer2", "org.mpris.MediaPlayer2.Player", "org.mpris.MediaPlayer2.Playlists", "org.mpris.MediaPlayer2.TrackList"]
+MediaPlayer2Service.dbus = [pkg_resources.resource_string(__name__, "mpris/" + iface + ".xml").decode("utf-8") for iface in ifaces]
