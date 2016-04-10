@@ -23,7 +23,7 @@
 # code, but you are not obligated to do so.  If you do not wish to do so,
 # delete this exception statement from your version.
 
-from gnomemusic.player import PlaybackStatus, RepeatType
+from gnomemusic.player import PlaybackStatus, RepeatType, DiscoveryStatus
 from gnomemusic.albumArtCache import AlbumArtCache
 from gnomemusic.grilo import grilo
 from gnomemusic.playlists import Playlists
@@ -337,7 +337,7 @@ class MediaPlayer2Service(Server):
         try:
             genre = media.get_genre()
             assert genre is not None
-            metadata['xesam:genre'] = GLib.Variant('as', genre)
+            metadata['xesam:genre'] = GLib.Variant('as', [genre])
         except:
             pass
 
@@ -481,7 +481,7 @@ class MediaPlayer2Service(Server):
         if self.first_song_handler:
             model.disconnect(self.first_song_handler)
             self.first_song_handler = 0
-        self.player.set_playlist('Songs', None, model, iter_, 5)
+        self.player.set_playlist('Songs', None, model, iter_, 5, DiscoveryStatus.PENDING)
         self.player.set_playing(True)
 
     @log
@@ -565,6 +565,9 @@ class MediaPlayer2Service(Server):
         self.player.Stop()
 
     def Play(self):
+        if self.player.playing:
+            return
+
         if self.player.playlist is not None:
             self.player.set_playing(True)
         elif self.first_song_handler == 0:
@@ -615,7 +618,8 @@ class MediaPlayer2Service(Server):
                                          self.player.playlistId,
                                          self.player.playlist,
                                          track.iter,
-                                         self.player.playlistField)
+                                         self.player.playlistField,
+                                         DiscoveryStatus.PENDING)
                 self.player.play()
                 return
 
